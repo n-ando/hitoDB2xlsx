@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+#
+# Usage:
+# 1. 人DBで検索した結果をhtmlに保存 (ex. input1.html, input2.html, ...)
+# 2. 以下のコマンドでcsvに変換
+#    $ python this_script.py output.csv input1.html input2.html ...
+#
+import sys
+import csv
+from bs4 import BeautifulSoup
+import re
+
+def extract_data_from_html(file_path):
+    data = []
+    # ファイルを 'shift_jis' エンコーディングで開く
+    with open(file_path, 'r', encoding='shift_jis', errors='replace') as file:
+        soup = BeautifulSoup(file, 'html.parser')
+        rows = soup.find_all('tr')[1:]  # スキップヘッダー行
+        for row in rows:
+            columns = row.find_all('td')
+            # カラム数が足りない場合はスキップ
+            print(len(columns))
+            if not columns or len(columns) < 8:
+                continue
+            #----------
+            # 個人ID
+            personal_id = columns[1].text.strip()
+
+            #----------
+            # 氏名
+            name_parts = columns[2].text.split("\n")
+            # 漢字氏名
+            name_kanji = name_parts[1].strip() + " " + name_parts[2].strip()
+            # ローマ字氏名
+            name_roman = name_parts[4].strip() + " " + name_parts[5].strip()
+
+            #----------
+            # 勤務地名
+            location = columns[3].text.strip()
+
+            #----------
+            # 主務所属（領域、部門、グループ、役職）
+            cleaned_text = columns[4].text.split('兼務')[0].replace('主務)', '').strip()
+            position_match = re.search(r'\[(.*?)\]', cleaned_text)
+            if position_match:
+                main_position = position_match.group(1)
+                # [] を削除
+                cleaned_text = re.sub(r'\[.*?\]', '', cleaned_text).strip()
+            else:
+                main_position = None
+            parts = cleaned_text.split()
+            
+            # main_division, main_institute, main_group の代入
+            main_department = parts[0] if len(parts) >= 1 else None
+            main_institute = parts[1] if len(parts) >= 2 else None
+            main_group = " ".join(parts[2:]) if len(parts) >= 3 else None
+
+            #----------
+            # 主務のみの職種名
+            main_job_title = columns[5].text.split('兼務')[0].replace('主務)', '').strip()
+
+            #----------
+            # 兼務の所属
+            input_text = '\n'.join(
+                 span.text.strip().strip() for span in columns[4].find_all('span', class_='additional')
+             )
+            cleaned_text = re.sub(r'\s+', ' ', input_text).strip()
+            matches = cleaned_text.split('兼務)')
+            tmp = ""
+            for line in matches:
+                if not line: continue
+                if tmp == "": tmp = "兼務) " + line
+                else:         tmp = tmp + '\n' + "兼務) " + line
+            concurrent_departments = tmp
+
+            #----------
+            # 兼務の職種名
+            input_text = '\n'.join(
+                 span.text.strip() for span in columns[5].find_all('span', class_='additional')
+             )
+            cleaned_text = re.sub(r'\s+', ' ', input_text).strip()
+            matches = cleaned_text.split('兼務)')
+            tmp = ""
+            for line in matches:
+                if not line: continue
+                if tmp == "": tmp = "兼務) " + line
+                else:         tmp = tmp + '\n' + "兼務) " + line
+            concurrent_job_titles = tmp
+
+            #----------
+            # 電話番号
+            if columns[6]:
+                input_text = '\n'.join(
+                     span.strip() for span in columns[6].text.split('\n')
+                )
+            phone = input_text
+            # メールアドレス
+            email = columns[7].find('a').text.strip() if columns[7].find('a') else ''
+
+            data.append([
+                personal_id, name_kanji, name_roman, location,
+                main_department, main_institute, main_group, main_position, main_job_title, concurrent_departments,
+                concurrent_job_titles, phone, email
+            ])
+    return data
+
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: python script.py output.csv input1.html input2.html ...")
+        sys.exit(1)
+
+    output_csv = sys.argv[1]
+    input_files = sys.argv[2:]
+
+    all_data = []
+    for file_path in input_files:
+        print(f"Processing {file_path}...")
+        all_data.extend(extract_data_from_html(file_path))
+
+    # CSVに書き込み
+    with open(output_csv, 'w', newline='', encoding='utf-8-sig') as csvfile:
+        writer = csv.writer(csvfile)
+        # ヘッダー行
+        writer.writerow([
+            '個人ID', '氏名', 'ローマ字氏名', '勤務地',
+            '主務所属領域', '主務所属ユニット', '主務所属グループ・チーム', '主務役職', '主務職種名',
+            '兼務所属', '兼務職種名',
+            '電話番号', 'メールアドレス'
+        ])
+        # データ行
+        writer.writerows(all_data)
+
+    print(f"CSV file {output_csv} has been created.")
+
+
+if __name__ == "__main__":
+    main()
